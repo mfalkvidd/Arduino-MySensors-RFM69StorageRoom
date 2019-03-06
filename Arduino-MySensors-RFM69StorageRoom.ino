@@ -3,61 +3,77 @@
 #define MY_NODE_ID 1
 
 // Enable and select radio type attached
+#define MY_RFM69_NEW_DRIVER
+//#define MY_RX_MESSAGE_BUFFER_FEATURE
+#define MY_RFM69_ATC_MODE_DISABLED
+#define MY_RFM69_CSMA_LIMIT_DBM -75
 #define MY_RADIO_RFM69
 #define MY_IS_RFM69HW
-#define MY_RFM69_FREQUENCY RFM69_433MHZ // RFM69_433MHZ for development branch, RF69_433MHZ for master
+#define MY_RFM69_FREQUENCY RFM69_433MHZ
 #define MY_RF69_IRQ_PIN 2
 #define MY_RF69_SPI_CS 10
 
+//#define MY_DEBUG_VERBOSE_RFM69 // Temporary
+
+#define MY_TRANSPORT_WAIT_READY_MS (30000) // Don't stay awake for more than 30s if communication is broken
+
 #include <MySensors.h> // From Library Manager
 
-#include <BME280I2C.h> // From Library Manager
-BME280I2C bme;
+#include <Adafruit_BME280.h>
+Adafruit_BME280 bme;
 
 static const uint64_t UPDATE_INTERVAL = 300000;
+#define WAIT_TIME 150
+#define ALTITUDE 6
 
 #define CHILD_ID_HUM 0
 #define CHILD_ID_TEMP 1
 #define CHILD_ID_VCC_BEFORE 2
 #define CHILD_ID_VCC_AFTER 3
-
-float lastTemp;
-float lastHum;
+#define CHILD_ID_PRESSURE 6
 
 MyMessage msgHum(CHILD_ID_HUM, V_HUM);
 MyMessage msgTemp(CHILD_ID_TEMP, V_TEMP);
 MyMessage msgVccBefore(CHILD_ID_VCC_BEFORE, V_VOLTAGE);
 MyMessage msgVccAfter(CHILD_ID_VCC_AFTER, V_VOLTAGE);
-//TODO: Add pressure from BME280?
+MyMessage msgPressure(CHILD_ID_PRESSURE, V_PRESSURE);
 //TODO: Add light detection (irq-based, LDR)
 //TODO: Add flooding detection
 
 void presentation()
 {
   // Send the sketch version information to the gateway
-  sendSketchInfo("StorageRoom", "1.0");
-
+  sendSketchInfo(F("StorageRoom " __DATE__), F("1.2"));
+  wait(WAIT_TIME);
   present(CHILD_ID_HUM, S_HUM);
-  wait(100);
+  wait(WAIT_TIME);
   present(CHILD_ID_TEMP, S_TEMP);
-  wait(100);
+  wait(WAIT_TIME);
   present(CHILD_ID_VCC_BEFORE, S_CUSTOM);
-  wait(100);
+  wait(WAIT_TIME);
   present(CHILD_ID_VCC_AFTER, S_CUSTOM);
+  wait(WAIT_TIME);
+  present(CHILD_ID_PRESSURE, S_BARO);
 }
 
 void setup()
 {
-  if (! bme.begin()) {
+  if (! bme.begin(0x76)) {
     Serial.println("Could not find a valid BME280 sensor, check wiring! Continuing without sensor...");
   }
+  bme.setSampling(Adafruit_BME280::MODE_FORCED,
+                  Adafruit_BME280::SAMPLING_X1, // temperature
+                  Adafruit_BME280::SAMPLING_X1, // pressure
+                  Adafruit_BME280::SAMPLING_X1, // humidity
+                  Adafruit_BME280::FILTER_OFF);
 }
-
 
 void loop()
 {
+  static float lastTemp, lastHum, lastPressure;
   send(msgVccBefore.set(readVcc() / 1000.0, 3));
-  float temperature = bme.temp();
+  bme.takeForcedMeasurement();
+  float temperature = bme.readTemperature();
   if (isnan(temperature)) {
     Serial.println("Failed reading temperature");
   } else if (temperature != lastTemp) {
@@ -70,7 +86,7 @@ void loop()
   Serial.println(temperature);
 #endif
 
-  float humidity = bme.hum();
+  float humidity = bme.readHumidity();
   if (isnan(humidity)) {
     Serial.println("Failed reading humidity");
   } else if (humidity != lastHum) {
@@ -81,6 +97,18 @@ void loop()
 #ifdef MY_DEBUG
   Serial.print("H: ");
   Serial.println(humidity);
+#endif
+  float pressure = bme.readPressure() / pow((1.0 - (ALTITUDE / 44330.0)), 5.255); // Adjust to sea level pressure using user altitude
+  if (isnan(pressure)) {
+    Serial.println("Failed reading pressure");
+  } else if (pressure != lastPressure) {
+    // Only send pressure if it changed since the last measurement
+    lastPressure = pressure;
+    send(msgPressure.set(pressure, 1));
+  }
+#ifdef MY_DEBUG
+  Serial.print("P: ");
+  Serial.println(pressure);
 #endif
 
   send(msgVccAfter.set(readVcc() / 1000.0, 3));
@@ -114,4 +142,3 @@ long readVcc() {
   result = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
   return result; // Vcc in millivolts
 }
-
